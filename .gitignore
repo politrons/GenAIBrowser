@@ -10,7 +10,7 @@
 # =========================
 # Sensitive/local email data
 # =========================
-data/gmail_chunks.jsonl
+data/web_chunks.jsonl
 
 # Optional private local exports (future-proof)
 data/*private*.jsonl
