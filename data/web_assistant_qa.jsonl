@@ -1,0 +1,6 @@
+{"question":"What is the latest stable Python version?","answer":"Answer with the latest stable version found in retrieved sources and cite the official Python release page URL."}
+{"question":"Compare Playwright and Selenium for modern web testing.","answer":"Provide a concise comparison table and cite source URLs for both tools."}
+{"question":"Summarize the key points of a release note page.","answer":"Return a short summary with bullet points and include the release note URL as citation."}
+{"question":"What changed recently in a library?","answer":"List the recent changes found in retrieved evidence with date and source URL."}
+{"question":"Find security best practices for API keys.","answer":"Summarize practical best practices from authoritative sources and cite URLs."}
+{"question":"What is the pricing of a SaaS product?","answer":"Report pricing only if clearly present in retrieved pages, otherwise state insufficient evidence and suggest a better query."}
