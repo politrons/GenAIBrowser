@@ -13,6 +13,8 @@ _TOKEN_RE = re.compile(r"\w+", flags=re.UNICODE)
 
 @dataclass(frozen=True)
 class RagChunk:
+    """Normalized chunk record used by the in-memory retriever."""
+
     chunk_id: str
     text: str
     source: str
@@ -23,6 +25,7 @@ class TfidfRagRetriever:
     """Small in-process TF-IDF retriever for local RAG workflows."""
 
     def __init__(self, chunks: list[RagChunk]) -> None:
+        """Precompute TF, IDF, and lengths for efficient query scoring."""
         if not chunks:
             raise ValueError("At least one chunk is required")
         self._chunks = chunks
@@ -42,10 +45,12 @@ class TfidfRagRetriever:
 
     @property
     def chunk_count(self) -> int:
+        """Return total number of indexed chunks."""
         return len(self._chunks)
 
     @classmethod
     def from_jsonl(cls, path: str | Path) -> "TfidfRagRetriever":
+        """Build a retriever from a single JSONL chunk file."""
         return cls(cls._load_jsonl_rows(path))
 
     @classmethod
@@ -61,6 +66,7 @@ class TfidfRagRetriever:
 
     @classmethod
     def _load_jsonl_rows(cls, path: str | Path) -> list[RagChunk]:
+        """Load and validate chunk rows from JSONL into `RagChunk` objects."""
         rows: list[RagChunk] = []
         path_obj = Path(path)
         for line in path_obj.read_text(encoding="utf-8").splitlines():
@@ -135,4 +141,5 @@ class TfidfRagRetriever:
 
     @staticmethod
     def _tokenize(text: str) -> list[str]:
+        """Tokenize text into lowercase word tokens."""
         return [tok.lower() for tok in _TOKEN_RE.findall(text)]

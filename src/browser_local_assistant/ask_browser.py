@@ -24,20 +24,22 @@ except Exception:  # pragma: no cover - optional at static analysis time
 DEFAULT_PROMPT_ARTIFACT: dict[str, Any] = {
     "instructions": (
         "You are a web research assistant. "
-        "Answer only from retrieved web snippets and knowledge snippets. "
+        "Answer only from retrieved page content and knowledge snippets. "
+        "Do not return only URLs. Extract concrete findings that match the user's search pattern/question. "
         "If evidence is missing, say it clearly and suggest a better search query."
     ),
     "default_context": (
-        "Focus on practical web research tasks: find facts, compare sources, summarize with citations, and stay concise."
+        "Focus on practical web research tasks: download page content, find matching patterns in that content, "
+        "summarize findings, and cite sources."
     ),
     "few_shot_demos": [
         {
             "question": "What are the most recent announcements about OpenAI API models?",
-            "answer": "Summarize key points and cite the source URLs used.",
+            "answer": "Extract concrete points from downloaded page content and cite the source URLs used.",
         },
         {
-            "question": "Compare two frameworks for browser automation.",
-            "answer": "Give a short comparison and cite source links for each claim.",
+            "question": "What movies are premiering in cinemas this week?",
+            "answer": "List movie titles found in page content, include brief details, and cite source URLs.",
         },
     ],
 }
@@ -45,9 +47,12 @@ DEFAULT_PROMPT_ARTIFACT: dict[str, Any] = {
 DEFAULT_SYSTEM_POLICY = (
     "You are a Web Search Assistant with strict grounding rules.\n"
     "Rules:\n"
-    "- Use only retrieved evidence from web pages and KB snippets.\n"
+    "- Use only retrieved evidence from downloaded web page content and KB snippets.\n"
     "- Never invent facts, dates, prices, versions, or URLs.\n"
     "- Prioritize recent evidence when user asks latest/recent/current.\n"
+    "- Prefer `web_page` evidence over generic search snippets whenever available.\n"
+    "- Never answer with only a list of URLs when page content exists.\n"
+    "- Match the user's requested pattern (for example names, counts, dates, releases) using page content.\n"
     "- If evidence is insufficient, say it explicitly and propose one improved query.\n"
     "Output style:\n"
     "- First line: direct answer.\n"
@@ -74,6 +79,7 @@ QUERY_PLANNER_PROMPT = (
     "- Use intent=web_search for most user questions that require internet evidence.\n"
     "- Use intent=summarize_existing only for explicit follow-up requests over already retrieved evidence.\n"
     "- search_query must be specific and ready for a search tool.\n"
+    "- Build search_query to capture the exact pattern requested by user (entities, location, date, category).\n"
     "- topic_terms must include meaningful keywords.\n"
     "- max_results must be an integer in [3, 12].\n"
     "- need_fresh_search should be true unless user clearly asks to summarize previous context only.\n"
@@ -91,6 +97,7 @@ DEFAULT_MCP_SERVER_COMMAND = "npx -y firecrawl-mcp"
 
 
 def _load_env_file(path: str = ".env") -> None:
+    """Load key/value pairs from a dotenv-style file into process environment."""
     env_path = Path(path)
     if not env_path.exists():
         return
@@ -107,6 +114,7 @@ def _load_env_file(path: str = ".env") -> None:
 
 
 def _env_value(*names: str, default: str = "") -> str:
+    """Return first non-empty environment value from candidate variable names."""
     for name in names:
         value = os.getenv(name)
         if value is None:
@@ -118,6 +126,7 @@ def _env_value(*names: str, default: str = "") -> str:
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI options for model, MCP transport, and local indexing behavior."""
     _load_env_file(".env")
 
     parser = argparse.ArgumentParser(description="Chat with a web browser assistant using MCP + local LLM + local RAG")
@@ -214,6 +223,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _discover_latest_prompt_artifact() -> Path | None:
+    """Find the most recently modified optimized prompt artifact on disk."""
     candidates: list[Path] = []
 
     default_path = Path("artifacts/dspy_optimized/optimized_prompt.json")
@@ -232,6 +242,7 @@ def _discover_latest_prompt_artifact() -> Path | None:
 
 
 def _resolve_prompt_artifact_path(raw_path: str | None) -> Path | None:
+    """Resolve prompt artifact path from explicit value or auto-discovery fallback."""
     candidate = (raw_path or "").strip()
     if candidate:
         path = Path(candidate)
@@ -243,6 +254,7 @@ def _resolve_prompt_artifact_path(raw_path: str | None) -> Path | None:
 
 
 def _load_prompt_artifact(path: str | Path | None) -> tuple[dict[str, Any], str]:
+    """Load optimized prompt artifact and merge it with built-in defaults."""
     if path is None:
         return dict(DEFAULT_PROMPT_ARTIFACT), "built-in-default"
 
@@ -264,6 +276,7 @@ def _load_prompt_artifact(path: str | Path | None) -> tuple[dict[str, Any], str]
 
 
 def _load_system_policy(path: str | Path) -> str:
+    """Load system policy text file, falling back to default policy string."""
     candidate = Path(path)
     if not candidate.exists():
         return DEFAULT_SYSTEM_POLICY
@@ -273,6 +286,7 @@ def _load_system_policy(path: str | Path) -> str:
 
 
 def _load_rows(path: str | Path) -> list[dict[str, Any]]:
+    """Load JSONL rows from disk, skipping malformed records safely."""
     path_obj = Path(path)
     if not path_obj.exists():
         return []
@@ -291,6 +305,7 @@ def _load_rows(path: str | Path) -> list[dict[str, Any]]:
 
 
 def _write_rows(path: str | Path, rows: list[dict[str, Any]]) -> None:
+    """Write JSONL rows to disk atomically at file level (overwrite mode)."""
     out_path = Path(path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     with out_path.open("w", encoding="utf-8") as f:
@@ -299,6 +314,7 @@ def _write_rows(path: str | Path, rows: list[dict[str, Any]]) -> None:
 
 
 def _parse_iso_date(value: str) -> datetime:
+    """Parse ISO-like datetime text and normalize missing timezone to UTC."""
     text = (value or "").strip()
     if not text:
         return datetime.min.replace(tzinfo=timezone.utc)
@@ -312,6 +328,7 @@ def _parse_iso_date(value: str) -> datetime:
 
 
 def _chunk_text(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+    """Split text into overlapping character windows for local indexing."""
     source = str(text or "").strip()
     if not source:
         return []
@@ -334,15 +351,18 @@ def _chunk_text(text: str, max_chars: int, overlap_chars: int) -> list[str]:
 
 
 def _hash_key(value: str) -> str:
+    """Create a short stable SHA1-based key for chunk identifiers."""
     return hashlib.sha1(value.encode("utf-8", errors="ignore")).hexdigest()[:12]
 
 
 def _to_url_domain(url: str) -> str:
+    """Extract normalized netloc/domain from a URL."""
     parsed = urlparse(url)
     return parsed.netloc.strip().lower()
 
 
 def _rows_from_search_summary(summary: dict[str, Any], args: argparse.Namespace) -> list[dict[str, Any]]:
+    """Convert MCP search/fetch summary into normalized local chunk rows."""
     query = str(summary.get("query", "")).strip()
     timestamp = datetime.now(timezone.utc).isoformat()
 
@@ -445,6 +465,7 @@ def _rows_from_search_summary(summary: dict[str, Any], args: argparse.Namespace)
 
 
 def _merge_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Merge chunk rows by chunk_id and sort by retrieval timestamp descending."""
     merged: dict[str, dict[str, Any]] = {}
     for row in existing + incoming:
         if not isinstance(row, dict):
@@ -465,6 +486,7 @@ def _merge_rows(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) 
 
 
 def _build_retriever_paths(args: argparse.Namespace) -> list[str]:
+    """Build list of available JSONL sources used for retriever indexing."""
     paths: list[str] = []
 
     web_chunks_path = Path(args.web_chunks)
@@ -481,6 +503,7 @@ def _build_retriever_paths(args: argparse.Namespace) -> list[str]:
 
 
 def _load_retriever_and_rows(args: argparse.Namespace) -> tuple[TfidfRagRetriever | None, list[dict[str, Any]]]:
+    """Load indexed rows and construct retriever when at least one source exists."""
     paths = _build_retriever_paths(args)
     if not paths:
         return None, []
@@ -497,6 +520,7 @@ def _load_retriever_and_rows(args: argparse.Namespace) -> tuple[TfidfRagRetrieve
 
 
 def _corpus_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Compute basic corpus statistics used in prompt grounding metadata."""
     domains: Counter[str] = Counter()
     unique_urls: set[str] = set()
 
@@ -519,6 +543,7 @@ def _corpus_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
 
 
 def _extract_json_object(text: str) -> str | None:
+    """Extract first balanced JSON object substring from mixed text output."""
     raw = (text or "").strip()
     if not raw:
         return None
@@ -559,6 +584,7 @@ def _extract_json_object(text: str) -> str | None:
 
 
 def _try_parse_json_dict(raw: str) -> dict[str, Any] | None:
+    """Attempt to parse a dictionary JSON object from model output text."""
     blob = _extract_json_object(raw)
     if blob is None:
         return None
@@ -572,6 +598,7 @@ def _try_parse_json_dict(raw: str) -> dict[str, Any] | None:
 
 
 def _repair_json_with_llm(generator: Any, schema_prompt: str, invalid_output: str, max_new_tokens: int) -> list[str]:
+    """Run one-pass LLM repair prompts to recover valid structured JSON."""
     invalid = str(invalid_output).strip()
     prompts = [
         "\n".join(
@@ -621,6 +648,7 @@ def _repair_json_with_llm(generator: Any, schema_prompt: str, invalid_output: st
 
 
 def _normalize_llm_plan(plan: dict[str, Any]) -> dict[str, Any]:
+    """Validate and normalize planner JSON into strict runtime schema."""
     if not isinstance(plan, dict):
         raise ValueError("Query plan must be a JSON object")
 
@@ -675,6 +703,7 @@ def _normalize_llm_plan(plan: dict[str, Any]) -> dict[str, Any]:
 
 
 def _plan_query_with_llm(question: str, context: str, system_policy: str, generator: Any) -> dict[str, Any]:
+    """Generate and validate structured retrieval plan for a user question."""
     prompt = "\n".join(
         [
             QUERY_PLANNER_PROMPT,
@@ -733,6 +762,7 @@ def _plan_query_with_llm(question: str, context: str, system_policy: str, genera
 
 
 def _metadata_from_chunk(chunk: dict[str, Any]) -> dict[str, str]:
+    """Extract normalized metadata fields from a retrieved chunk object."""
     raw_meta = chunk.get("metadata")
     if not isinstance(raw_meta, dict):
         raw_meta = {}
@@ -746,6 +776,7 @@ def _metadata_from_chunk(chunk: dict[str, Any]) -> dict[str, str]:
 
 
 def _format_evidence(chunk: dict[str, Any], max_snippet_chars: int) -> str:
+    """Format one retrieved chunk into compact evidence text for prompting."""
     metadata = _metadata_from_chunk(chunk)
     kind = metadata.get("kind") or "unknown"
     title = metadata.get("title") or "(untitled)"
@@ -769,8 +800,10 @@ def _build_prompt(
     retrieved_chunks: list[dict[str, Any]],
     corpus_stats: dict[str, Any],
     query_hit_count: int,
+    web_page_hit_count: int,
     max_snippet_chars: int,
 ) -> str:
+    """Assemble final grounded prompt from policy, plan, stats, and evidence."""
     instruction = str(prompt_artifact.get("instructions", DEFAULT_PROMPT_ARTIFACT["instructions"]))
     default_context = str(prompt_artifact.get("default_context", DEFAULT_PROMPT_ARTIFACT["default_context"]))
     demos = prompt_artifact.get("few_shot_demos", [])
@@ -792,6 +825,7 @@ def _build_prompt(
     lines.append(f"- indexed_chunks: {corpus_stats.get('indexed_chunks', 0)}")
     lines.append(f"- unique_urls: {corpus_stats.get('unique_urls', 0)}")
     lines.append(f"- query_url_hits: {query_hit_count}")
+    lines.append(f"- web_page_chunks_in_evidence: {web_page_hit_count}")
 
     top_domains = corpus_stats.get("top_domains", [])
     if isinstance(top_domains, list) and top_domains:
@@ -816,8 +850,10 @@ def _build_prompt(
 
     lines.append("Response requirements:")
     lines.append("1) Be concise and concrete.")
-    lines.append("2) Cite source URLs in the evidence bullets.")
-    lines.append("3) If evidence is missing, say it explicitly and propose one better query.")
+    lines.append("2) Use downloaded page content to answer the user pattern/question.")
+    lines.append("3) Do not return only URLs when web_page evidence exists.")
+    lines.append("4) Cite source URLs in the evidence bullets.")
+    lines.append("5) If evidence is missing, say it explicitly and propose one better query.")
 
     lines.append(f"User question: {question}")
     lines.append("Answer:")
@@ -825,6 +861,7 @@ def _build_prompt(
 
 
 def _normalize_task(task: str) -> str:
+    """Normalize model task aliases to transformer pipeline task names."""
     requested = (task or "").strip().lower()
     if not requested:
         return "text-generation"
@@ -832,6 +869,7 @@ def _normalize_task(task: str) -> str:
 
 
 def _safe_model_max_input_tokens(tokenizer: Any, default_max_tokens: int = 2048) -> int:
+    """Return safe max input length from tokenizer with defensive fallback."""
     model_max = getattr(tokenizer, "model_max_length", None)
     if not isinstance(model_max, int) or model_max <= 0 or model_max > 100_000:
         return default_max_tokens
@@ -839,6 +877,7 @@ def _safe_model_max_input_tokens(tokenizer: Any, default_max_tokens: int = 2048)
 
 
 def _build_generator(task: str, model_id: str):
+    """Create local generation backend for seq2seq or causal model families."""
     if torch is None:
         raise RuntimeError("PyTorch is required for local generation. Install torch in your environment.")
 
@@ -895,6 +934,7 @@ def _build_generator(task: str, model_id: str):
 
 
 def _generate_answer(generator: Any, prompt: str, max_new_tokens: int, temperature: float) -> str:
+    """Generate text from configured backend and normalize output payload shape."""
     if isinstance(generator, dict) and str(generator.get("engine", "")).endswith("-manual"):
         if torch is None:
             raise RuntimeError("PyTorch is required for manual generation.")
@@ -981,6 +1021,7 @@ def _run_single_question(
     indexed_rows: list[dict[str, Any]],
     args: argparse.Namespace,
 ) -> dict[str, Any]:
+    """Run retrieval and answer synthesis pipeline for one chat turn."""
     if generator is None:
         raise RuntimeError("Generator is not initialized")
 
@@ -1007,14 +1048,30 @@ def _run_single_question(
         top_k=max(args.rag_top_k * 4, selected_k),
         min_score=args.rag_min_score,
     )
-    retrieved_chunks = retrieval_candidates[:selected_k]
+    page_chunks: list[dict[str, Any]] = []
+    non_page_chunks: list[dict[str, Any]] = []
+    for chunk in retrieval_candidates:
+        metadata = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
+        kind = str(metadata.get("kind", "")).strip().lower()
+        if kind == "web_page":
+            page_chunks.append(chunk)
+        else:
+            non_page_chunks.append(chunk)
+
+    # Prefer downloaded page-content chunks over generic search snippets.
+    retrieved_chunks = list(page_chunks[:selected_k])
+    if len(retrieved_chunks) < selected_k:
+        retrieved_chunks.extend(non_page_chunks[: selected_k - len(retrieved_chunks)])
 
     unique_urls: set[str] = set()
+    web_page_hit_count = 0
     for chunk in retrieved_chunks:
         meta = chunk.get("metadata") if isinstance(chunk.get("metadata"), dict) else {}
         url = str(meta.get("url", "")).strip()
         if url:
             unique_urls.add(url)
+        if str(meta.get("kind", "")).strip().lower() == "web_page":
+            web_page_hit_count += 1
 
     corpus_stats = _corpus_stats(indexed_rows)
     prompt = _build_prompt(
@@ -1026,6 +1083,7 @@ def _run_single_question(
         retrieved_chunks=retrieved_chunks,
         corpus_stats=corpus_stats,
         query_hit_count=len(unique_urls),
+        web_page_hit_count=web_page_hit_count,
         max_snippet_chars=min(args.max_snippet_chars, 220),
     )
 
@@ -1060,6 +1118,7 @@ def _run_single_question(
 
 
 def _print_result(result: dict[str, Any], search_summary: dict[str, Any] | None) -> None:
+    """Render human-readable answer, evidence, and top URLs in terminal mode."""
     print("Answer:")
     print(str(result.get("answer", "")).strip())
     print("")
@@ -1092,6 +1151,7 @@ def _print_result(result: dict[str, Any], search_summary: dict[str, Any] | None)
 
 
 def main() -> None:
+    """Run interactive browser assistant loop with MCP retrieval and RAG answers."""
     args = parse_args()
 
     mcp_server_command = str(args.mcp_server_command).strip()

@@ -10,16 +10,24 @@ Every answer must stay grounded in evidence and cite source URLs.
 When user asks for latest/current news:
 - Include time-sensitive keywords in the search query (for example: "2026", "latest", "release notes").
 - Prefer official docs, company blogs, standards bodies, and primary sources.
+- Download page content and search for the user-requested pattern in that content.
 
 When user asks for comparisons:
 - Retrieve at least two independent sources.
 - Keep claims factual and tied to source snippets.
+
+When user asks list-style questions (for example movie premieres, events, products):
+- Extract concrete items from downloaded page text (names, dates, locations).
+- Avoid answering with links only.
 
 ## Evidence Rules
 
 Always provide:
 - Short direct answer
 - Evidence bullets with title + URL
+
+If downloaded page content exists:
+- Include concrete findings from that content, not just source links.
 
 If no strong evidence exists, answer:
 1. "Insufficient evidence in retrieved sources"

@@ -12,12 +12,14 @@ MODULE_BY_COMMAND = {
 
 
 def run_module(module: str, module_args: list[str]) -> int:
+    """Run a Python module in a subprocess and return its exit code."""
     cmd = [sys.executable, "-m", module, *module_args]
     print("Running:", " ".join(cmd))
     return subprocess.call(cmd)
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse launcher arguments and command passthrough parameters."""
     parser = argparse.ArgumentParser(description="Launcher for local browser assistant (DSPy + MCP web + local HF)")
     parser.add_argument(
         "command",
@@ -33,6 +35,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
+    """Resolve selected command and delegate execution to the target module."""
     args = parse_args()
     module = MODULE_BY_COMMAND[args.command]
 

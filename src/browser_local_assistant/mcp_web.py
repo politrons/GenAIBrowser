@@ -40,6 +40,7 @@ FETCH_TOOL_ALIASES = (
 
 
 def _read_json_message_lsp(stream) -> dict[str, Any] | None:
+    """Read one LSP-framed JSON-RPC message from a byte stream."""
     content_length = -1
 
     while True:
@@ -75,6 +76,8 @@ def _read_json_message_lsp(stream) -> dict[str, Any] | None:
 
 
 class _StdioMcpClient:
+    """Minimal MCP stdio client supporting LSP and NDJSON transport."""
+
     def __init__(
         self,
         command: str,
@@ -82,6 +85,7 @@ class _StdioMcpClient:
         request_timeout_s: int = 45,
         stdio_protocol: str = "auto",
     ):
+        """Configure process command, protocol mode, and timeout settings."""
         self.command = (command or "").strip()
         self.startup_timeout_s = max(5, int(startup_timeout_s))
         self.request_timeout_s = max(5, int(request_timeout_s))
@@ -101,6 +105,7 @@ class _StdioMcpClient:
         self._write_lock = threading.Lock()
 
     def __enter__(self) -> "_StdioMcpClient":
+        """Start MCP subprocess, negotiate protocol, and send initialize."""
         if not self.command:
             raise ValueError("Missing MCP server command. Set --mcp-server-command or MCP_SERVER_COMMAND.")
 
@@ -124,9 +129,11 @@ class _StdioMcpClient:
         raise RuntimeError("Could not initialize MCP process.")
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """Ensure subprocess resources are released on context exit."""
         self._stop_process()
 
     def _start_process(self, cmd: list[str], protocol: str) -> None:
+        """Spawn MCP process and start background reader threads."""
         self._active_stdio_protocol = protocol
         self._messages = queue.Queue()
         self._reader_error = None
@@ -150,6 +157,7 @@ class _StdioMcpClient:
         self._stderr_thread.start()
 
     def _stop_process(self) -> None:
+        """Terminate MCP process gracefully, force-kill as fallback."""
         proc = self._proc
         self._proc = None
         if proc is None:
@@ -169,6 +177,7 @@ class _StdioMcpClient:
                 pass
 
     def _stderr_loop(self) -> None:
+        """Continuously collect stderr lines for diagnostics."""
         proc = self._proc
         if proc is None or proc.stderr is None:
             return
@@ -184,6 +193,7 @@ class _StdioMcpClient:
                     self._stderr_lines = self._stderr_lines[-80:]
 
     def _reader_loop(self) -> None:
+        """Continuously parse stdout JSON messages into queue entries."""
         try:
             proc = self._proc
             if proc is None or proc.stdout is None:
@@ -215,6 +225,7 @@ class _StdioMcpClient:
             self._messages.put(None)
 
     def _send_message(self, payload: dict[str, Any]) -> None:
+        """Serialize and write one JSON-RPC payload to MCP stdin."""
         proc = self._proc
         if proc is None or proc.stdin is None:
             raise RuntimeError("MCP process is not available.")
@@ -230,12 +241,14 @@ class _StdioMcpClient:
             proc.stdin.flush()
 
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
+        """Send a JSON-RPC notification (no response expected)."""
         payload: dict[str, Any] = {"jsonrpc": "2.0", "method": method}
         if params is not None:
             payload["params"] = params
         self._send_message(payload)
 
     def request(self, method: str, params: dict[str, Any] | None = None, timeout_s: int | None = None) -> dict[str, Any]:
+        """Send a JSON-RPC request and return the matching result payload."""
         request_id = self._next_id
         self._next_id += 1
 
@@ -286,6 +299,7 @@ class _StdioMcpClient:
         raise TimeoutError(f"MCP request timeout for '{method}'.")
 
     def initialize(self) -> None:
+        """Perform MCP handshake and emit initialized notification."""
         self.request(
             "initialize",
             {
@@ -298,9 +312,11 @@ class _StdioMcpClient:
         self.notify("notifications/initialized", {})
 
     def call_tool(self, name: str, arguments: dict[str, Any]) -> dict[str, Any]:
+        """Call MCP `tools/call` with tool name plus argument object."""
         return self.request("tools/call", {"name": name, "arguments": arguments})
 
     def list_tools(self) -> list[str]:
+        """Return available MCP tool names from `tools/list`."""
         result = self.request("tools/list", {})
         tools = result.get("tools")
         if not isinstance(tools, list):
@@ -317,6 +333,7 @@ class _StdioMcpClient:
 
 
 def _extract_json_from_text(text: str) -> Any | None:
+    """Try to parse JSON from raw text, including embedded object/array slices."""
     raw = (text or "").strip()
     if not raw:
         return None
@@ -346,6 +363,7 @@ def _extract_json_from_text(text: str) -> Any | None:
 
 
 def _as_text(value: Any) -> str:
+    """Normalize scalar/list values into a trimmed string representation."""
     if value is None:
         return ""
     if isinstance(value, str):
@@ -359,6 +377,7 @@ def _as_text(value: Any) -> str:
 
 
 def _dedupe_keep_order(values: list[str]) -> list[str]:
+    """Remove duplicates while preserving first-seen order."""
     out: list[str] = []
     seen: set[str] = set()
     for value in values:
@@ -371,9 +390,11 @@ def _dedupe_keep_order(values: list[str]) -> list[str]:
 
 
 def _walk_dicts(payload: Any) -> list[dict[str, Any]]:
+    """Collect every dictionary found recursively inside payload."""
     found: list[dict[str, Any]] = []
 
     def _walk(node: Any) -> None:
+        """Recursively traverse nested containers collecting dict nodes."""
         if isinstance(node, dict):
             found.append(node)
             for child in node.values():
@@ -388,6 +409,7 @@ def _walk_dicts(payload: Any) -> list[dict[str, Any]]:
 
 
 def _select_search_tool(available_tools: list[str], explicit_tool_name: str) -> str:
+    """Resolve search tool name via explicit value, aliases, then heuristics."""
     explicit = (explicit_tool_name or "").strip()
     if explicit:
         return explicit
@@ -418,6 +440,7 @@ def _select_search_tool(available_tools: list[str], explicit_tool_name: str) -> 
 
 
 def _select_fetch_tool(available_tools: list[str], explicit_tool_name: str) -> str:
+    """Resolve fetch/extract tool name via explicit value, aliases, then heuristics."""
     explicit = (explicit_tool_name or "").strip()
     if explicit:
         return explicit
@@ -439,6 +462,7 @@ def _select_fetch_tool(available_tools: list[str], explicit_tool_name: str) -> s
 
 
 def _with_account(arguments: dict[str, Any], account: str) -> dict[str, Any]:
+    """Attach optional account field to tool arguments."""
     account_value = (account or "").strip()
     if not account_value:
         return dict(arguments)
@@ -452,6 +476,7 @@ def _call_tool_with_candidates(
     tool_name: str,
     candidates: list[dict[str, Any]],
 ) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Try argument variants until one tool call succeeds."""
     last_error: Exception | None = None
     for arguments in candidates:
         try:
@@ -466,6 +491,7 @@ def _call_tool_with_candidates(
 
 
 def _normalize_search_item(record: dict[str, Any], rank: int) -> dict[str, Any] | None:
+    """Map heterogeneous search record fields into normalized result schema."""
     url = ""
     for key in ("url", "link", "href", "uri", "source_url", "sourceUrl"):
         url = _as_text(record.get(key))
@@ -503,6 +529,7 @@ def _normalize_search_item(record: dict[str, Any], rank: int) -> dict[str, Any] 
 
 
 def _extract_search_items_from_tool_result(result: dict[str, Any]) -> list[dict[str, Any]]:
+    """Extract and deduplicate normalized search results from MCP payload."""
     candidates: list[dict[str, Any]] = []
 
     structured = result.get("structuredContent")
@@ -538,15 +565,18 @@ def _extract_search_items_from_tool_result(result: dict[str, Any]) -> list[dict[
 
 
 def _collect_text_fragments(payload: Any, max_fragments: int = 80) -> list[str]:
+    """Collect candidate text snippets recursively from nested payload objects."""
     fragments: list[str] = []
 
     def _add(text: str) -> None:
+        """Normalize and append one candidate fragment if non-empty."""
         normalized = " ".join(text.split())
         if not normalized:
             return
         fragments.append(normalized)
 
     def _walk(node: Any) -> None:
+        """Traverse nested payload and extract text-like fields recursively."""
         if len(fragments) >= max_fragments:
             return
 
@@ -599,6 +629,7 @@ def _collect_text_fragments(payload: Any, max_fragments: int = 80) -> list[str]:
 
 
 def _extract_page_text_from_tool_result(result: dict[str, Any]) -> str:
+    """Extract merged textual page content from MCP fetch tool response."""
     fragments: list[str] = []
 
     structured = result.get("structuredContent")
@@ -632,6 +663,7 @@ def _extract_page_text_from_tool_result(result: dict[str, Any]) -> str:
 
 
 def _trim_text(text: str, max_chars: int) -> str:
+    """Clamp text length to max_chars, preserving whole prefix semantics."""
     if max_chars <= 0:
         return ""
     raw = (text or "").strip()
@@ -653,6 +685,7 @@ def search_web_via_mcp(
     startup_timeout_s: int = 20,
     request_timeout_s: int = 45,
 ) -> dict[str, Any]:
+    """Execute MCP web search plus optional page fetch and return normalized output."""
     query_value = (query or "").strip()
     if not query_value:
         raise ValueError("query must be a non-empty string")

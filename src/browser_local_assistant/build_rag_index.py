@@ -9,6 +9,7 @@ _TEXT_EXTENSIONS = {".md", ".txt"}
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments used to build local JSONL chunks for RAG."""
     parser = argparse.ArgumentParser(description="Build a JSONL chunk index for local RAG retrieval")
     parser.add_argument(
         "--input-paths",
@@ -23,6 +24,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def _collect_files(paths: list[str]) -> list[Path]:
+    """Collect supported text files from file and directory inputs."""
     out: list[Path] = []
     for raw in paths:
         p = Path(raw)
@@ -41,6 +43,7 @@ def _collect_files(paths: list[str]) -> list[Path]:
 
 
 def _split_long_text(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+    """Split long text into overlapping fixed-size chunks."""
     text = text.strip()
     if not text:
         return []
@@ -62,6 +65,7 @@ def _split_long_text(text: str, max_chars: int, overlap_chars: int) -> list[str]
 
 
 def _chunk_document(text: str, max_chars: int, overlap_chars: int) -> list[str]:
+    """Chunk a document by paragraphs while preserving local context."""
     paragraphs = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     if not paragraphs:
         return []
@@ -92,6 +96,7 @@ def _chunk_document(text: str, max_chars: int, overlap_chars: int) -> list[str]:
 
 
 def main() -> None:
+    """Build and write the chunk index, then print a JSON summary."""
     args = parse_args()
 
     if args.max_chars < 200:

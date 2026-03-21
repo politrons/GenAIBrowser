@@ -21,11 +21,13 @@ from .dspy_program import BrowserAssistant
 
 
 def _normalize(text: str) -> list[str]:
+    """Normalize text into lowercase alphanumeric tokens."""
     cleaned = "".join(ch.lower() if ch.isalnum() or ch.isspace() else " " for ch in text)
     return [token for token in cleaned.split() if token]
 
 
 def _read_field(obj: Any, key: str, default: str = "") -> str:
+    """Read an attribute/key from heterogeneous objects with fallback default."""
     if hasattr(obj, key):
         value = getattr(obj, key)
         if value is not None:
@@ -38,6 +40,7 @@ def _read_field(obj: Any, key: str, default: str = "") -> str:
 
 
 def answer_token_f1(example: Any, pred: Any, trace: Any = None) -> float:
+    """Compute token-level F1 between gold answer and predicted answer."""
     del trace
     gold_tokens = _normalize(_read_field(example, "answer"))
     pred_tokens = _normalize(_read_field(pred, "answer"))
@@ -66,6 +69,7 @@ def answer_token_f1(example: Any, pred: Any, trace: Any = None) -> float:
 
 
 def _configure_lm(args: argparse.Namespace) -> None:
+    """Configure global DSPy language model backend from CLI arguments."""
     lm_kwargs: dict[str, Any] = {
         "temperature": args.temperature,
         "max_tokens": args.max_tokens,
@@ -83,17 +87,20 @@ def _configure_lm(args: argparse.Namespace) -> None:
 
 
 def _is_ollama_compiler_model(model_name: str) -> bool:
+    """Return True when compiler model points to an Ollama provider."""
     value = (model_name or "").strip().lower()
     return value.startswith("ollama/") or value.startswith("ollama_chat/")
 
 
 def _extract_model_name(compiler_model: str) -> str:
+    """Extract raw model name from provider-prefixed compiler model string."""
     if "/" not in compiler_model:
         return compiler_model
     return compiler_model.split("/", 1)[1].strip()
 
 
 def _preflight_ollama(args: argparse.Namespace) -> None:
+    """Validate local Ollama installation and API availability when required."""
     if not _is_ollama_compiler_model(args.compiler_model):
         return
 
@@ -124,6 +131,7 @@ def _preflight_ollama(args: argparse.Namespace) -> None:
 
 
 def _maybe_enable_mlflow_tracing(enabled: bool) -> None:
+    """Enable optional MLflow DSPy autolog tracing if requested."""
     if not enabled:
         return
     try:
@@ -135,6 +143,7 @@ def _maybe_enable_mlflow_tracing(enabled: bool) -> None:
 
 
 def _evaluate(program: BrowserAssistant, devset: list[Any]) -> float:
+    """Evaluate a DSPy program on dev set using token F1 metric."""
     scores: list[float] = []
     for ex in devset:
         pred = program(question=_read_field(ex, "question"), context=_read_field(ex, "context"))
@@ -146,6 +155,7 @@ def _extract_prompt_artifact(
     optimized_program: BrowserAssistant,
     context: str,
 ) -> dict[str, Any]:
+    """Export optimized instructions and demos into runtime prompt artifact format."""
     predictor = getattr(optimized_program, "respond", None)
 
     instructions = (
@@ -178,6 +188,7 @@ def _extract_prompt_artifact(
 
 
 def parse_args() -> argparse.Namespace:
+    """Parse CLI arguments for DSPy prompt optimization workflow."""
     parser = argparse.ArgumentParser(description="Compile DSPy prompt specialization for web research Q&A")
     parser.add_argument("--dataset", default="data/web_assistant_qa.jsonl")
     parser.add_argument("--domain-context-file", default="config/browser_domain_context.txt")
@@ -201,6 +212,7 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> None:
+    """Run end-to-end DSPy optimization and write resulting artifacts."""
     args = parse_args()
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)

@@ -12,9 +12,13 @@ class BrowserDomainAnswer(dspy.Signature):
 
 
 class BrowserAssistant(dspy.Module):
+    """DSPy module wrapper that predicts grounded browser-research answers."""
+
     def __init__(self) -> None:
+        """Initialize prediction head for the browser-domain signature."""
         super().__init__()
         self.respond = dspy.Predict(BrowserDomainAnswer)
 
     def forward(self, question: str, context: str):
+        """Run one inference step using question plus domain context."""
         return self.respond(question=question, context=context)
